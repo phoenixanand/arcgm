@@ -167,7 +167,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <header className="topbar">
         <Link to="/" className="brand">
           <span className="brand-mark"><img src="/arcgm11.png" alt="ArcGM logo" /></span>
-          <span>ArcPulse</span>
+          <span>ArcGM</span>
         </Link>
         <nav>
           <Link to="/leaderboard">Leaderboard</Link>
