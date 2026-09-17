@@ -1,0 +1,10 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { q } from './db.js';
+const app=express();app.use(cors());app.use(express.json());
+app.get('/health',async(_req,res)=>{const r=await q('SELECT block_number FROM checkpoints WHERE id=1');res.json({ok:true,indexedThrough:r.rows[0]?.block_number||0})});
+app.get('/leaderboard',async(req,res)=>{const sort=req.query.sort==='streak'?'streak':'points';const page=Math.max(1,Number(req.query.page||1));const pageSize=Math.min(100,Math.max(1,Number(req.query.pageSize||25)));const offset=(page-1)*pageSize;if(offset>=100)return res.json({items:[],total:0,page,pageSize,hasMore:false});const effectivePageSize=Math.min(pageSize,100-offset);const order=sort==='streak'?'streak DESC,longest_streak DESC,total_points DESC':'total_points DESC,streak DESC,gm_count DESC';const data=await q(`SELECT address,username,avatar,gm_count,streak,longest_streak,total_points::text,successful_referrals FROM users ORDER BY ${order} LIMIT $1 OFFSET $2`,[effectivePageSize,offset]);const total=(await q<{count:string}>('SELECT COUNT(*)::text as count FROM users')).rows[0].count;const cappedTotal=Math.min(100,Number(total));res.json({items:data.rows,total:cappedTotal,page,pageSize,hasMore:offset+data.rows.length<cappedTotal})});
+app.get('/profiles/:address',async(req,res)=>{const address=req.params.address.toLowerCase();const u=(await q('SELECT address,username,avatar,gm_count,streak,longest_streak,total_points::text,successful_referrals FROM users WHERE address=$1',[address])).rows[0];if(!u)return res.status(404).json({error:'not found'});const rank=(await q<{rank:string}>(`SELECT rank FROM (SELECT address,RANK() OVER(ORDER BY total_points DESC) rank FROM users) r WHERE address=$1`,[address])).rows[0]?.rank;res.json({...u,rank:Number(rank||0),badges:await badgeTiers(address)})});
+async function badgeTiers(address:string){const rows=await q<{tier:number}>(`SELECT DISTINCT tier FROM badges WHERE wallet=$1 ORDER BY tier`,[address]);return rows.rows.map(r=>r.tier)}
+const port=Number(process.env.PORT||4000);app.listen(port,()=>console.log(`arcgm API listening on :${port}`));

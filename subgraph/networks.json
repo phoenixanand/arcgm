@@ -1,0 +1,14 @@
+{
+  "arc-testnet": {
+    "ArcGM": {
+      "address": "0x2C9626c40E34Bd42DA1068302849F89936E5a2C7",
+      "startBlock": 21348816
+    }
+  },
+  "arc": {
+    "ArcGM": {
+      "address": "0xAa61a31e8Bd155f5358C01d231F4F9a939738f59",
+      "startBlock": 21348816
+    }
+  }
+}

@@ -1,0 +1,102 @@
+
+.env
+.env.*
+!.env.example
+
+# Private keys / credentials
+*.pem
+*.key
+*.secret
+secrets/
+credentials/
+secrets.json
+credentials.json
+
+
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Vite local environment files
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+
+
+# HARDHAT / SMART CONTRACTS
+
+contracts/node_modules/
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/coverage/
+contracts/.openzeppelin/
+
+
+# Hardhat deployment/build output
+contracts/deployments/
+
+
+
+# INDEXER / THE GRAPH
+
+indexer/node_modules/
+
+# Generated Graph files
+indexer/build/
+indexer/generated/
+
+# Graph generated code
+indexer/src/generated/
+
+
+# GENERAL BUILD OUTPUT
+
+
+dist/
+build/
+coverage/
+.cache/
+.tmp/
+.temp/
+
+
+
+
+*.log
+logs/
+
+
+
+# OS FILES
+
+.DS_Store
+Thumbs.db
+
+
+# IDE
+
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+.idea/
+*.swp
+*.swo
+
+
+
+# TYPESCRIPT
+
+
+*.tsbuildinfo

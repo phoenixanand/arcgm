@@ -1,0 +1,34 @@
+specVersion: 1.3.0
+description: ArcGM social GM and streak protocol
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: ArcGM
+    network: arc
+    source:
+      abi: ArcGM
+      address: "0xAa61a31e8Bd155f5358C01d231F4F9a939738f59"
+      startBlock: 21348816
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - User
+        - GMRecord
+        - Referral
+      abis:
+        - name: ArcGM
+          file: ./abis/ArcGM.json
+      eventHandlers:
+        - event: GMRecorded(indexed
+            address,uint256,uint32,uint256,uint32,uint256,uint32,indexed
+            address)
+          handler: handleGMRecorded
+        - event: ReferralSet(indexed address,indexed address)
+          handler: handleReferralSet
+        - event: UserStatsUpdated(indexed
+            address,uint256,uint32,uint32,uint32,uint32,uint256)
+          handler: handleUserStatsUpdated
+      file: ./src/mapping.ts

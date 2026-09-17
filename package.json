@@ -1,0 +1,1 @@
+{"name":"arcgm","private":true,"scripts":{"contracts":"cd contracts && npm run compile","contract-test":"cd contracts && npm run test","frontend":"cd frontend && npm run dev","indexer-migrate":"cd indexer && npm run migrate","indexer":"cd indexer && npm run index","api":"cd indexer && npm run api"}}

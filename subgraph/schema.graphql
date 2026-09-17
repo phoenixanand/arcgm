@@ -1,0 +1,35 @@
+type User @entity(immutable: false) {
+  id: Bytes!
+
+  totalPoints: BigInt!
+  gmCount: BigInt!
+  streak: BigInt!
+  longestStreak: BigInt!
+  successfulReferrals: BigInt!
+  lastGMTimestamp: BigInt!
+
+  gmRecords: [GMRecord!]! @derivedFrom(field: "user")
+}
+
+type GMRecord @entity(immutable: true) {
+  id: Bytes!
+
+  user: User!
+
+  timestamp: BigInt!
+  streak: BigInt!
+  pointsAwarded: BigInt!
+  gmCount: BigInt!
+  totalPoints: BigInt!
+  longestStreak: BigInt!
+
+  referrer: Bytes
+}
+
+type Referral @entity(immutable: true) {
+  id: Bytes!
+
+  referred: Bytes!
+  referrer: Bytes!
+  timestamp: BigInt!
+}
