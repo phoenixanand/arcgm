@@ -1,6 +1,6 @@
-# ArcPulse — Web3 Social dApp on Arc Testnet
+# ArcGM — Web3 Social dApp on Arc Testnet
 
-A full-stack Web3 social check-in app for Arc Testnet.
+A full-stack Web3 social check-in app for Arc Mainnet.
 
 ## Included
 
@@ -15,12 +15,7 @@ A full-stack Web3 social check-in app for Arc Testnet.
 - React + Wagmi + Viem frontend
 - Hardhat + OpenZeppelin Solidity contracts
 
-## Arc Testnet configuration
 
-- Chain ID: `5042002`
-- RPC: `https://rpc.testnet.arc.network`
-- Explorer: `https://testnet.arcscan.app`
-- Native gas currency: USDC
 
 ## Repository
 
@@ -33,19 +28,7 @@ arcgm/
   subgraph/      graphql
 ```
 
-## 1. Contracts
 
-```bash
-cd contracts
-npm install
-cp .env.example .env
-# set DEPLOYER_PRIVATE_KEY
-npm run compile
-npm run test
-npm run deploy:arc:testnet
-```
-
-Copy the deployed addresses into `shared/contracts.json` and `frontend/.env`.
 
 ## 2. Indexer
 
@@ -60,23 +43,6 @@ npm run index
 npm run api
 ```
 
-The API exposes:
-
-- `GET /leaderboard?sort=points&page=1&pageSize=25`
-- `GET /leaderboard?sort=streak&page=1&pageSize=25`
-- `GET /profiles/:address`
-- `GET /health`
-
-The indexer only consumes contract events; leaderboard pages never scan chain state.
-
-## 3. Frontend
-
-```bash
-cd frontend
-npm install
-cp .env.example .env
-npm run dev
-```
 
 ## Important implementation details
 
@@ -91,10 +57,10 @@ After the first GM, a GM made 24–48 hours after the previous GM increments the
 ### Points
 
 - Base: 10 points
-- Consecutive streak bonus: +5 × `min(streak, 7)`
+- Consecutive streak bonus: `min(streak, 7)`
 - Referral bonus: +50 once for the referrer and +50 once for the new user
 
-That yields 15 points for day 1, 20 for day 2, ..., 45 for day 7+. The formula is centralized in the contract so the indexer can reproduce it deterministically.
+That yields 10 points for day 1, 20 for day 2, ..., 45 for day 7+. The formula is centralized in the contract so the indexer can reproduce it deterministically.
 
 ### Sybil resistance
 
