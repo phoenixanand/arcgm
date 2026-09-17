@@ -1,7 +1,7 @@
 
 .env
 .env.*
-!.env.example
+.env.example
 
 # Private keys / credentials
 *.pem
@@ -28,7 +28,7 @@ frontend/.vite/
 # Vite local environment files
 frontend/.env
 frontend/.env.*
-!frontend/.env.example
+frontend/.env.example
 
 
 
@@ -87,8 +87,8 @@ Thumbs.db
 
 
 .vscode/*
-!.vscode/settings.json
-!.vscode/extensions.json
+.vscode/settings.json
+.vscode/extensions.json
 
 .idea/
 *.swp
