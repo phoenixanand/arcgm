@@ -4,12 +4,13 @@ import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 're
 import { useAccount, useConnect, useDisconnect, useWriteContract } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { readContract, waitForTransactionReceipt } from 'wagmi/actions';
-import { decodeEventLog, createPublicClient, http, isAddress } from 'viem';
+import { decodeEventLog, createPublicClient, encodeFunctionData, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
 import { useConfig } from 'wagmi';
 import { Copy, ExternalLink, Flame, UserRound, Wallet, Zap } from 'lucide-react';
 import { arcMainnet } from './lib/chain';
 import { CONTRACTS, GM_ABI, PROFILE_ABI, TEMPLATE_DEPLOYER_ABI } from './lib/contracts';
+
 
 const truncate = (a: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—');
 const explorer = (hash: string) => `https://explorer.arc.io/tx/${hash}`;
@@ -287,7 +288,7 @@ function Home() {
   const [canGM, setCanGM] = useState(true);
   const [celebrating, setCelebrating] = useState(false);
   const [celebrationType, setCelebrationType] = useState<'normal' | 'milestone'>('normal');
-  const celebrationTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const celebrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Tracks the UTC day (Math.floor(unixSeconds / 86400)) of a GM tx that
   // was just confirmed by THIS client. The subgraph can take several
@@ -1166,14 +1167,16 @@ function DeployCard() {
     try {
       await ensureArc();
 
-      const { estimateContractGas, getGasPrice } = await import('wagmi/actions');
+      const { estimateGas, getGasPrice } = await import('wagmi/actions');
 
-      const g = await estimateContractGas(config, {
-        address: CONTRACTS.templateDeployer,
+      const g = await estimateGas(config, {
+      account: address,
+      to: CONTRACTS.templateDeployer,
+      data: encodeFunctionData({
         abi: TEMPLATE_DEPLOYER_ABI,
-        functionName: 'deployStorage',
-        args: [initial],
-        account: address,
+      functionName: 'deployStorage',
+      args: [initial],
+      }),
       });
 
       const price = await getGasPrice(config);
