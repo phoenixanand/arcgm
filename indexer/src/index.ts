@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { createPublicClient, http } from 'viem';
 import { arcTestnet } from './chain.js';
 import { pool, q } from './db.js';
