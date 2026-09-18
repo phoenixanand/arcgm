@@ -15,35 +15,6 @@ A full-stack Web3 social check-in app for Arc Mainnet.
 - React + Wagmi + Viem frontend
 - Hardhat + OpenZeppelin Solidity contracts
 
-
-
-## Repository
-
-```text
-arcgm/
-  contracts/     Solidity + Hardhat deployment
-  frontend/      React + Vite + Wagmi/Viem
-  indexer/       Viem event indexer + Express + PostgreSQL
-  shared/        ABI/address config consumed by the frontend
-  subgraph/      graphql
-```
-
-
-
-## 2. Indexer
-
-Requires PostgreSQL.
-
-```bash
-cd indexer
-npm install
-cp .env.example .env
-npm run migrate
-npm run index
-npm run api
-```
-
-
 ## Important implementation details
 
 ### Daily GM rule
@@ -85,6 +56,3 @@ Profile updates are direct wallet transactions to `ProfileRegistry`, so only the
 - Use a relayer/paymaster if sponsored badge mints are desired
 - Audit contracts before mainnet use
 
-## dApp directory provenance
-
-The starter directory intentionally contains a small curated set rather than pretending to auto-discover the ecosystem. For example, Across is documented by Arc as live on Arc Testnet, and Tradable has announced expansion to Arc. Verify each project's current deployment/status before a public launch. citeturn560226search0turn560226search1
