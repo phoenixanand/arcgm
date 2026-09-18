@@ -28,7 +28,7 @@ const config = createConfig({
   chains: [arcMainnet, arcTestnet],
   connectors,
   transports: {
-    [arcMainnet.id]: http('https://rpc.mainnet.arc.io'),
+    [arcMainnet.id]: http(arcMainnet.rpcUrls.default.http[0]),
     [arcTestnet.id]: http('https://rpc.testnet.arc.network'),
   },
   multiInjectedProviderDiscovery: true,

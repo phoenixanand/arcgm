@@ -17,7 +17,7 @@ export const arcMainnet = defineChain({
   rpcUrls: {
     default: {
       http: [
-        'https://rpc.mainnet.arc.io'
+        'https://rpc.arc-scan.org'
       ]
     }
   },
