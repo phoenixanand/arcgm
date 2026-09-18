@@ -4,16 +4,21 @@ import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 're
 import { useAccount, useConnect, useDisconnect, useWriteContract } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { readContract, waitForTransactionReceipt } from 'wagmi/actions';
-import { decodeEventLog, createPublicClient, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
 import { useConfig } from 'wagmi';
 import { Copy, ExternalLink, Flame, Trophy, UserRound, Wallet, Zap } from 'lucide-react';
 import { arcMainnet } from './lib/chain';
-import { CONTRACTS, GM_ABI, PROFILE_ABI, TEMPLATE_DEPLOYER_ABI } from './lib/contracts';
+import { CONTRACTS, GM_ABI, PROFILE_ABI, BADGES_ABI, TEMPLATE_DEPLOYER_ABI } from './lib/contracts';
+import {
+  decodeEventLog,
+  createPublicClient,
+  http,
+  isAddress,
+} from 'viem';
 
 const truncate = (a: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—');
 const explorer = (hash: string) => `https://explorer.arc.io/tx/${hash}`;
-const indexerUrl = import.meta.env.VITE_INDEXER_URL as string | undefined;
+
 
 // Matches the five one-time milestone tiers defined in ArcGM.sol /
 // MilestoneBadges.sol (7, 30, 100, 200, 365 day streaks). Kept in one
@@ -287,7 +292,7 @@ function Home() {
   const [canGM, setCanGM] = useState(true);
   const [celebrating, setCelebrating] = useState(false);
   const [celebrationType, setCelebrationType] = useState<'normal' | 'milestone'>('normal');
-  const celebrationTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const celebrationTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Tracks the UTC day (Math.floor(unixSeconds / 86400)) of a GM tx that
   // was just confirmed by THIS client. The subgraph can take several
@@ -1012,11 +1017,7 @@ function Profile({ wallet }: { wallet: string }) {
     queryFn: () => ensClient.getEnsAvatar({ name: ensName! }),
     enabled: !!ensName,
   });
-  const { data: idx } = useQuery({
-    queryKey: ['profile-index', address],
-    queryFn: () => fetch(`${indexerUrl}/profiles/${address}`).then((r) => r.json()),
-    enabled: !!indexerUrl,
-  });
+ 
   const { connector, address: connectedAddress } = useAccount();
   const own = connectedAddress?.toLowerCase() === address.toLowerCase();
   const [name, setName] = useState((profile as any)?.[0] || '');
@@ -1061,9 +1062,29 @@ function Profile({ wallet }: { wallet: string }) {
   };
 
   const profileHasOnChainData = !!((profile as any)?.[0] || (profile as any)?.[1]);
-  const displayName = (profile as any)?.[0] || idx?.username || ensName || truncate(address);
+  const displayName = (profile as any)?.[0] || ensName || truncate(address);
   const displayAvatar = own ? (avatar || ensAvatar || '') : ((profile as any)?.[1] || ensAvatar || '');
-  const badges = MILESTONE_TIERS.filter((t) => idx?.badges?.includes(t));
+  const { data: badges = [] } = useQuery({
+  queryKey: ['badges', address],
+  enabled: isAddress(address),
+  queryFn: async () => {
+    const results = await Promise.all(
+      MILESTONE_TIERS.map((tier) =>
+        readContract(config, {
+          address: CONTRACTS.badges,
+          abi: BADGES_ABI,
+          functionName: 'mintedTier',
+          args: [address, tier],
+          chainId: arcMainnet.id,
+        })
+      )
+    );
+
+    return MILESTONE_TIERS.filter(
+      (_, index) => results[index]
+    );
+  },
+});
 
   return (
     <main className="container profile-page">
@@ -1191,17 +1212,17 @@ function DeployCard() {
     try {
       await ensureArc();
 
-      const { estimateContractGas, getGasPrice } = await import('wagmi/actions');
+      const client = createPublicClient({ chain: arcMainnet, transport: http(),});
 
-      const g = await estimateContractGas(config, {
-        address: CONTRACTS.templateDeployer,
-        abi: TEMPLATE_DEPLOYER_ABI,
-        functionName: 'deployStorage',
-        args: [initial],
-        account: address,
+      const g = await client.estimateContractGas({
+      address: CONTRACTS.templateDeployer,
+      abi: TEMPLATE_DEPLOYER_ABI,
+      functionName: 'deployStorage',
+      args: [initial],
+      account: address,
       });
 
-      const price = await getGasPrice(config);
+      const price = await client.getGasPrice();
 
       setGas(g);
 

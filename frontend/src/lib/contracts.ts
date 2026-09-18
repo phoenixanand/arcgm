@@ -5,7 +5,6 @@ export const CONTRACTS = {
   profile: (import.meta.env.VITE_PROFILE_ADDRESS) as `0x${string}`,
   templateDeployer: (import.meta.env.VITE_TEMPLATE_DEPLOYER_ADDRESS) as `0x${string}`,
 };
-export const indexerUrl = import.meta.env.VITE_INDEXER_URL || 'http://localhost:4000';
 
 export const GM_ABI = [
   {type:'function',name:'users',stateMutability:'view',inputs:[{name:'',type:'address'}],outputs:[{name:'lastGMTimestamp',type:'uint64'},{name:'gmCount',type:'uint32'},{name:'streak',type:'uint32'},{name:'longestStreak',type:'uint32'},{name:'totalPoints',type:'uint256'},{name:'successfulReferrals',type:'uint32'},{name:'hasGMHistory',type:'bool'}]},
