@@ -7,13 +7,13 @@ import { readContract, waitForTransactionReceipt } from 'wagmi/actions';
 import { decodeEventLog, createPublicClient, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
 import { useConfig } from 'wagmi';
-import { Copy, ExternalLink, Flame, Trophy, UserRound, Wallet, Zap } from 'lucide-react';
+import { Copy, ExternalLink, Flame, UserRound, Wallet, Zap } from 'lucide-react';
 import { arcMainnet } from './lib/chain';
 import { CONTRACTS, GM_ABI, PROFILE_ABI, TEMPLATE_DEPLOYER_ABI } from './lib/contracts';
 
 const truncate = (a: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—');
 const explorer = (hash: string) => `https://explorer.arc.io/tx/${hash}`;
-const indexerUrl = import.meta.env.VITE_INDEXER_URL as string | undefined;
+
 
 // Matches the five one-time milestone tiers defined in ArcGM.sol /
 // MilestoneBadges.sol (7, 30, 100, 200, 365 day streaks). Kept in one
@@ -1012,11 +1012,7 @@ function Profile({ wallet }: { wallet: string }) {
     queryFn: () => ensClient.getEnsAvatar({ name: ensName! }),
     enabled: !!ensName,
   });
-  const { data: idx } = useQuery({
-    queryKey: ['profile-index', address],
-    queryFn: () => fetch(`${indexerUrl}/profiles/${address}`).then((r) => r.json()),
-    enabled: !!indexerUrl,
-  });
+  
   const { connector, address: connectedAddress } = useAccount();
   const own = connectedAddress?.toLowerCase() === address.toLowerCase();
   const [name, setName] = useState((profile as any)?.[0] || '');
@@ -1061,9 +1057,9 @@ function Profile({ wallet }: { wallet: string }) {
   };
 
   const profileHasOnChainData = !!((profile as any)?.[0] || (profile as any)?.[1]);
-  const displayName = (profile as any)?.[0] || idx?.username || ensName || truncate(address);
+  const displayName = (profile as any)?.[0] || ensName || truncate(address);
   const displayAvatar = own ? (avatar || ensAvatar || '') : ((profile as any)?.[1] || ensAvatar || '');
-  const badges = MILESTONE_TIERS.filter((t) => idx?.badges?.includes(t));
+  
 
   return (
     <main className="container profile-page">
@@ -1124,27 +1120,6 @@ function Profile({ wallet }: { wallet: string }) {
           ['Referrals', stats.data?.successfulReferrals ?? '—'],
         ]}
       />
-
-      <section className="panel">
-        <div className="panel-head">
-          <span>
-            <Trophy size={17} /> Milestone badges
-          </span>
-          <small>ERC-721 </small>
-        </div>
-        {badges.length ? (
-          <div className="badges">
-            {badges.map((b) => (
-              <div className="badge" key={b}>
-                <div className="badge-medal">{b}</div>
-                <span>{b}-Day Streak</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="muted">No milestone badge yet. Keep the streak alive.</p>
-        )}
-      </section>
     </main>
   );
 }
