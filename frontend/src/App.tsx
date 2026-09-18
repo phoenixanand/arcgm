@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getUserStats, getUserRank } from './graphql/arcgm';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAccount, useConnect, useDisconnect, useWriteContract } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { readContract, waitForTransactionReceipt } from 'wagmi/actions';
-import { decodeEventLog, createPublicClient, http } from 'viem';
+import { decodeEventLog, createPublicClient, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
 import { useConfig } from 'wagmi';
 import { Copy, ExternalLink, Flame, Trophy, UserRound, Wallet, Zap } from 'lucide-react';
@@ -39,6 +39,22 @@ function useGMStats(address?: `0x${string}`) {
     enabled: !!address,
     queryFn: () => getUserStats(address!),
   });
+}
+
+// A small reusable stats block. Home and Profile were rendering the exact
+// same markup with different data — pulled out once instead of maintaining
+// two copies that will inevitably drift.
+function StatsGrid({ items }: { items: [string, React.ReactNode][] }) {
+  return (
+    <section className="stats-grid">
+      {items.map(([k, v]) => (
+        <div className="metric" key={k}>
+          <span>{k}</span>
+          <strong>{v}</strong>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +172,38 @@ function useWalletNetwork(connector: any, isConnected: boolean) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Transaction confirmation.
+//
+// THE BUG THIS FIXES: waitForTransactionReceipt was being called with no
+// `chainId` and no `timeout`. Without an explicit chainId, the receipt
+// watcher can end up polling against the wrong chain in the wagmi config
+// (not necessarily Arc), in which case it will never find the receipt.
+// wagmi's default timeout is unlimited (0 = no timeout), so the await never
+// resolves or rejects — the UI just sits on "pending" forever. Reloading
+// the page "fixes" it only because the subgraph has caught up by then, not
+// because the original wait ever completed.
+//
+// Fix: pin chainId explicitly, bound it with a real timeout, and if the
+// watcher still fails, fall back to asking Arc directly for the receipt
+// once before giving up.
+// ---------------------------------------------------------------------------
+async function confirmTransaction(config: any, hash: `0x${string}`) {
+  try {
+    return await waitForTransactionReceipt(config, {
+      hash,
+      chainId: arcMainnet.id,
+      confirmations: 1,
+      timeout: 60_000,
+    });
+  } catch (e) {
+    const client = createPublicClient({ chain: arcMainnet, transport: http() });
+    const receipt = await client.getTransactionReceipt({ hash }).catch(() => null);
+    if (receipt) return receipt;
+    throw e;
+  }
+}
+
 function Layout({ children }: { children: React.ReactNode }) {
   const { address, isConnected, connector } = useAccount();
   const { connect, connectors } = useConnect();
@@ -213,7 +261,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       {children}
       <footer>
         <span>arcgm · GM on Arc</span>
-        <a href="https://docs.arc.io" target="_blank">
+        <a href="https://docs.arc.io" target="_blank" rel="noopener noreferrer">
           Arc docs <ExternalLink size={13} />
         </a>
       </footer>
@@ -230,6 +278,7 @@ function Home() {
   const { isArcWallet } = useWalletNetwork(connector, isConnected);
   const [ref] = useSearchParams();
   const [friend, setFriend] = useState('');
+  const [friendAddressError, setFriendAddressError] = useState('');
 
   const [status, setStatus] = useState<GMStatus>('idle');
   const [statusMessage, setStatusMessage] = useState('');
@@ -238,6 +287,7 @@ function Home() {
   const [canGM, setCanGM] = useState(true);
   const [celebrating, setCelebrating] = useState(false);
   const [celebrationType, setCelebrationType] = useState<'normal' | 'milestone'>('normal');
+  const celebrationTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Tracks the UTC day (Math.floor(unixSeconds / 86400)) of a GM tx that
   // was just confirmed by THIS client. The subgraph can take several
@@ -256,6 +306,15 @@ function Home() {
   const stats = useGMStats(address);
   const client = useQueryClient();
   const referral = ref.get('ref');
+
+  // Clear any pending celebration timeout on unmount so we never call
+  // setState on an unmounted component (e.g. user navigates away right
+  // after a successful GM).
+  useEffect(() => {
+    return () => {
+      if (celebrationTimeoutRef.current) clearTimeout(celebrationTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const updateCooldown = () => {
@@ -364,7 +423,7 @@ function Home() {
       setStatus('pending');
       setStatusMessage('Your GM is being recorded on Arc…');
 
-      const receipt = await waitForTransactionReceipt(config, { hash: tx, confirmations: 1 });
+      const receipt = await confirmTransaction(config, tx);
 
       if (receipt.status === 'success') {
         setStatus('success');
@@ -388,7 +447,8 @@ function Home() {
         const streak = Number((updatedStats as any)[2]);
         setCelebrationType(MILESTONE_TIERS.includes(streak) ? 'milestone' : 'normal');
 
-        setTimeout(() => setCelebrating(false), 4000);
+        if (celebrationTimeoutRef.current) clearTimeout(celebrationTimeoutRef.current);
+        celebrationTimeoutRef.current = setTimeout(() => setCelebrating(false), 4000);
       } else {
         setStatus('error');
         setStatusMessage('The transaction was not confirmed successfully.');
@@ -403,6 +463,9 @@ function Home() {
       if (message.toLowerCase().includes('reject') || message.toLowerCase().includes('denied')) {
         setStatus('cancelled');
         setStatusMessage('Transaction cancelled. You rejected the wallet request.');
+      } else if (message.toLowerCase().includes('timeout') || message.toLowerCase().includes('timed out')) {
+        setStatus('error');
+        setStatusMessage('Still waiting on Arc — the transaction may have gone through. Check the explorer link, or refresh in a moment.');
       } else {
         setStatus('error');
         setStatusMessage(message);
@@ -412,6 +475,12 @@ function Home() {
 
   const gmFriend = async () => {
     if (!friend || !address || !connector) return;
+
+    if (!isAddress(friend)) {
+      setFriendAddressError('That is not a valid wallet address.');
+      return;
+    }
+    setFriendAddressError('');
 
     try {
       setFriendStatus('idle');
@@ -433,7 +502,7 @@ function Home() {
       setFriendStatus('pending');
       setFriendMessage('Sending GM to your friend…');
 
-      const receipt = await waitForTransactionReceipt(config, { hash: tx, confirmations: 1 });
+      const receipt = await confirmTransaction(config, tx);
 
       if (receipt.status === 'success') {
         setFriendStatus('success');
@@ -493,6 +562,16 @@ function Home() {
       {celebration}
 
       <main className="container">
+        {isConnected && !isArcWallet && (
+          <div className="tx-status tx-error" style={{ marginBottom: 16 }}>
+            <div className="tx-status-icon">⚠</div>
+            <div className="tx-status-content">
+              <strong>Wallet is not on Arc Mainnet</strong>
+              <p>You'll be asked to switch networks the moment you send a transaction.</p>
+            </div>
+          </div>
+        )}
+
         <section className="hero">
           <div>
             <span className="eyebrow">ARC STREAK</span>
@@ -557,19 +636,14 @@ function Home() {
           </div>
         </section>
 
-        <section className="stats-grid">
-  {[
-    ['GM count', stats.data?.gmCount ?? '—'],
-    ['Current streak', stats.data?.streak ?? '—'],
-    ['Longest streak', stats.data?.longestStreak ?? '—'],
-    ['Points', stats.data?.totalPoints ?? '—'],
-  ].map(([k, v]) => (
-    <div className="metric" key={k as string}>
-      <span>{k}</span>
-      <strong>{v as string}</strong>
-    </div>
-  ))}
-</section>
+        <StatsGrid
+          items={[
+            ['GM count', stats.data?.gmCount ?? '—'],
+            ['Current streak', stats.data?.streak ?? '—'],
+            ['Longest streak', stats.data?.longestStreak ?? '—'],
+            ['Points', stats.data?.totalPoints ?? '—'],
+          ]}
+        />
 
         <section className="split">
           <div className="panel">
@@ -580,11 +654,27 @@ function Home() {
               <small>GM</small>
             </div>
             <div className="inline-form">
-              <input value={friend} onChange={(e) => setFriend(e.target.value)} placeholder="0x wallet address" />
-              <button className="primary" onClick={gmFriend} disabled={!friend || friendStatus === 'switching' || friendStatus === 'wallet' || friendStatus === 'pending'}>
+              <input
+                value={friend}
+                onChange={(e) => {
+                  setFriend(e.target.value);
+                  if (friendAddressError) setFriendAddressError('');
+                }}
+                placeholder="0x wallet address"
+              />
+              <button
+                className="primary"
+                onClick={gmFriend}
+                disabled={!friend || friendStatus === 'switching' || friendStatus === 'wallet' || friendStatus === 'pending'}
+              >
                 GM them
               </button>
             </div>
+            {friendAddressError && (
+              <p className="muted" style={{ marginTop: 8, fontSize: 13, color: '#b42318' }}>
+                {friendAddressError}
+              </p>
+            )}
             {friendStatus !== 'idle' && friendMessage && (
               <p
                 className="muted"
@@ -645,7 +735,7 @@ function Home() {
               <p>{statusMessage}</p>
 
               {hash && (
-                <a href={explorer(hash)} target="_blank" rel="noreferrer">
+                <a href={explorer(hash)} target="_blank" rel="noopener noreferrer">
                   View transaction on ArcScan
                   <ExternalLink size={13} />
                 </a>
@@ -663,11 +753,11 @@ function Leaderboard() {
   const sort = (params.get('sort') || 'points') as 'points' | 'streak';
   const page = Number(params.get('page') || 1);
   const q = useQuery({
-  queryKey: ['lb', sort, page],
-  queryFn: async () => {
-    const orderBy = sort === 'points' ? 'totalPoints' : 'streak';
+    queryKey: ['lb', sort, page],
+    queryFn: async () => {
+      const orderBy = sort === 'points' ? 'totalPoints' : 'streak';
 
-    const query = `
+      const query = `
       {
         users(
           first: 100
@@ -683,48 +773,48 @@ function Leaderboard() {
       }
     `;
 
-    const response = await fetch(
-      import.meta.env.VITE_GRAPH_URL,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `GraphQL request failed: ${response.status}`
+      const response = await fetch(
+        import.meta.env.VITE_GRAPH_URL,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+          }),
+        }
       );
-    }
 
-    const result = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          `GraphQL request failed: ${response.status}`
+        );
+      }
 
-    if (result.errors?.length) {
-      throw new Error(result.errors[0].message);
-    }
+      const result = await response.json();
 
-    const users = result.data.users;
+      if (result.errors?.length) {
+        throw new Error(result.errors[0].message);
+      }
 
-    const start = (page - 1) * 25;
-    const end = start + 25;
+      const users = result.data.users;
 
-    return {
-      items: users.slice(start, end).map((u: any) => ({
-        address: u.id,
-        username: '',
-        gm_count: u.gmCount,
-        streak: u.streak,
-        total_points: u.totalPoints,
-      })),
-      hasMore: end < users.length,
-    };
-  },
-});
+      const start = (page - 1) * 25;
+      const end = start + 25;
+
+      return {
+        items: users.slice(start, end).map((u: any) => ({
+          address: u.id,
+          username: '',
+          gm_count: u.gmCount,
+          streak: u.streak,
+          total_points: u.totalPoints,
+        })),
+        hasMore: end < users.length,
+      };
+    },
+  });
   return (
     <main className="container">
       <div className="page-title">
@@ -745,55 +835,58 @@ function Leaderboard() {
       <div className="table panel">
         {q.isLoading ? (
           <p>Loading…</p>
+        ) : q.isError ? (
+          <p className="muted" style={{ color: '#b42318' }}>
+            Couldn't load the leaderboard ({q.error instanceof Error ? q.error.message : 'unknown error'}). Try refreshing.
+          </p>
         ) : (
           <>
             <div className="table-row table-head">
-  <span>#</span>
-  <span>Wallet</span>
-  <span>GM</span>
-  <span>Streak</span>
-  <span>Points</span>
-</div>
+              <span>#</span>
+              <span>Wallet</span>
+              <span>GM</span>
+              <span>Streak</span>
+              <span>Points</span>
+            </div>
 
-{q.data?.items?.map((u: any, i: number) => {
-  const rank = (page - 1) * 25 + i + 1;
+            {q.data?.items?.map((u: any, i: number) => {
+              const rank = (page - 1) * 25 + i + 1;
 
-  return (
-    <div
-      className={`table-row ${
-        rank === 1
-          ? "rank-first"
-          : rank === 2
-          ? "rank-second"
-          : rank === 3
-          ? "rank-third"
-          : ""
-      }`}
-      key={u.address}
-    >
-      <span className="rank">
-        {rank === 1
-          ? "🥇"
-          : rank === 2
-          ? "🥈"
-          : rank === 3
-          ? "🥉"
-          : rank}
-      </span>
+              return (
+                <div
+                  className={`table-row ${
+                    rank === 1
+                      ? "rank-first"
+                      : rank === 2
+                      ? "rank-second"
+                      : rank === 3
+                      ? "rank-third"
+                      : ""
+                  }`}
+                  key={u.address}
+                >
+                  <span className="rank">
+                    {rank === 1
+                      ? "🥇"
+                      : rank === 2
+                      ? "🥈"
+                      : rank === 3
+                      ? "🥉"
+                      : rank}
+                  </span>
 
-      <Link to={`/profile/${u.address}`}>
-        {u.username || truncate(u.address)}
-      </Link>
+                  <Link to={`/profile/${u.address}`}>
+                    {u.username || truncate(u.address)}
+                  </Link>
 
-      <span>{u.gm_count}</span>
+                  <span>{u.gm_count}</span>
 
-      <span>{u.streak} 🔥</span>
+                  <span>{u.streak} 🔥</span>
 
-      <strong>{u.total_points}</strong>
-    </div>
-  );
-})}
-
+                  <strong>{u.total_points}</strong>
+                </div>
+              );
+            })}
           </>
         )}
         <div className="pager">
@@ -811,10 +904,10 @@ function Leaderboard() {
 }
 
 const DIRECTORY = [
-  
+
   { cat: 'Bridges', name: 'ARC-Portal', desc: 'ARC main bridge integrated with layerzero, across, LIFI', url: 'https://portal.arc.io/swap', icon: 'A' },
   { cat: 'Bridges', name: 'Across', desc: 'Crosschain transfers for moving assets to Arc.', url: 'https://across.to', icon: '↗' },
-  
+
   { cat: 'Bridges', name: 'Relay', desc: 'Crosschain transfers for moving assets from/to Arc', url: 'https://relay.link/', icon: 'R' },
   { cat: 'DeFi', name: 'Uniswap', desc: 'decentralized exchange (DEX) on the ARC, enabling permissionless token swaps via automated market makers (AMM) and liquidity pools rather than traditional order books.', url: 'https://app.uniswap.org/', icon: 'U' },
   { cat: 'DeFi', name: 'Aerodrome', desc: 'Aerodrome is a Token swaps and liquidity', url: 'https://app.aero.xyz/', icon: 'A' },
@@ -822,13 +915,6 @@ const DIRECTORY = [
   { cat: 'Lending', name: 'Aave', desc: 'Aave is a decentralized finance protocol (DeFi) that enables the lending and borrowing of cryptocurrencies without the involvement of intermediary financial institutions.', url: 'https://app.aave.com/', icon: 'A' },
   { cat: 'Lending', name: 'Morpho', desc: 'Morpho is a Permissionless lending markets', url: 'https://morpho.org/', icon: 'M' },
   { cat: 'other', name: 'EdgeX', desc: 'EdgeX is a trading perpetual futures and spot markets while maintaining on-chain settlement and user control of assets', url: 'https://pro.edgex.exchange/', icon: 'E' },
-  // {
-  //   cat: 'Marketplaces',
-  //   name: 'Tradable',
-  //   desc: 'Tokenized private-market infrastructure expanding to Arc.',
-  //   url: 'https://tradable.finance',
-  //   icon: 'T',
-  // },
   {
     cat: 'Marketplaces',
     name: 'OpenSea',
@@ -838,11 +924,11 @@ const DIRECTORY = [
   },
   { cat: 'Other', name: 'Maple', desc: 'Maple is the onchain asset management Through institutional-grade lending and yield strategies to the transparency and innovation of crypto', url: 'https://maple.finance/', icon: 'M' },
   { cat: 'Other', name: 'Circle', desc: 'Infrastructure behind Arc and USDC-native finance.', url: 'https://www.circle.com', icon: '◉' }
-  
+
 ];
 
 function Directory() {
-  const cats = ['All', 'DeFi', 'Lending', 'Bridges', 'Gambling', 'Marketplaces', 'Launchpad', 'Agents', 'Payments' , 'Other'];
+  const cats = ['All', 'DeFi', 'Lending', 'Bridges', 'Gambling', 'Marketplaces', 'Launchpad', 'Agents', 'Payments', 'Other'];
   const [cat, setCat] = useState('All');
   const rows = DIRECTORY.filter((d) => cat === 'All' || d.cat === cat);
   return (
@@ -870,7 +956,7 @@ function Directory() {
               <h3>{d.name}</h3>
               <p>{d.desc}</p>
             </div>
-            <a href={d.url} target="_blank" className="secondary" >
+            <a href={d.url} target="_blank" rel="noopener noreferrer" className="secondary">
               Open <ExternalLink size={14} />
             </a>
           </article>
@@ -881,15 +967,45 @@ function Directory() {
 }
 
 function Profile({ wallet }: { wallet: string }) {
+  if (!isAddress(wallet)) {
+    return (
+      <main className="container">
+        <p className="muted">That's not a valid wallet address.</p>
+      </main>
+    );
+  }
+
   const address = wallet as `0x${string}`;
   const config = useConfig();
+  const client = useQueryClient();
   const stats = useGMStats(address);
-  const {data:rank}=useQuery({ queryKey:['user-rank',address], enabled:!!address, queryFn:()=>getUserRank(address),});
-  const { data: profile } = useQuery({
+  const { data: rank } = useQuery({ queryKey: ['user-rank', address], enabled: !!address, queryFn: () => getUserRank(address) });
+  const {
+    data: profile,
+    isError: profileIsError,
+    error: profileError,
+    isLoading: profileIsLoading,
+  } = useQuery({
     queryKey: ['profile-chain', address],
-    queryFn: () => readContract(config, { address: CONTRACTS.profile, abi: PROFILE_ABI, functionName: 'profiles', args: [address] }),
+    queryFn: async () => {
+      const result = await readContract(config, {
+        address: CONTRACTS.profile,
+        abi: PROFILE_ABI,
+        functionName: 'profiles',
+        args: [address],
+        chainId: arcMainnet.id,
+      });
+      // DIAGNOSTIC: compare this against calling profiles(address) directly
+      // on ArcScan's "Read Contract" tab for the same address. If they
+      // disagree, the problem is in this read path (wrong CONTRACTS.profile
+      // address, wrong RPC in this dev environment, etc). If they match and
+      // are both empty, the write never actually landed on-chain.
+      console.log('[profile read]', { address, contract: CONTRACTS.profile, result });
+      return result;
+    },
   });
-  const ensClient = createPublicClient({ chain: mainnet, transport: http() });
+  // Memoized so we don't spin up a brand-new viem client on every render.
+  const ensClient = useMemo(() => createPublicClient({ chain: mainnet, transport: http() }), []);
   const { data: ensName } = useQuery({ queryKey: ['ens-name', address], queryFn: () => ensClient.getEnsName({ address }) });
   const { data: ensAvatar } = useQuery({
     queryKey: ['ens-avatar', address],
@@ -906,6 +1022,8 @@ function Profile({ wallet }: { wallet: string }) {
   const [name, setName] = useState((profile as any)?.[0] || '');
   const [avatar, setAvatar] = useState((profile as any)?.[1] || '');
   const { writeContractAsync } = useWriteContract();
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
     if (profile) {
@@ -916,14 +1034,36 @@ function Profile({ wallet }: { wallet: string }) {
 
   const save = async () => {
     if (!connector) return;
-    await assertArcWallet(connector);
-    await writeContractAsync({ chainId: arcMainnet.id, address: CONTRACTS.profile, abi: PROFILE_ABI, functionName: 'setProfile', args: [name, avatar] });
+    try {
+      setSaveStatus('saving');
+      setSaveMessage('');
+      await assertArcWallet(connector);
+      const hash = await writeContractAsync({
+        chainId: arcMainnet.id,
+        address: CONTRACTS.profile,
+        abi: PROFILE_ABI,
+        functionName: 'setProfile',
+        args: [name, avatar],
+      });
+      const receipt = await confirmTransaction(config, hash);
+      if (receipt.status !== 'success') {
+        setSaveStatus('error');
+        setSaveMessage('The transaction reverted — profile was not saved. Check it on ArcScan.');
+        return;
+      }
+      await client.invalidateQueries({ queryKey: ['profile-chain', address] });
+      setSaveStatus('success');
+      setSaveMessage('Profile saved.');
+    } catch (e: any) {
+      setSaveStatus('error');
+      setSaveMessage(e?.shortMessage || e?.message || 'Could not save profile.');
+    }
   };
 
+  const profileHasOnChainData = !!((profile as any)?.[0] || (profile as any)?.[1]);
   const displayName = (profile as any)?.[0] || idx?.username || ensName || truncate(address);
-  const displayAvatar = avatar || ensAvatar || '';
+  const displayAvatar = own ? (avatar || ensAvatar || '') : ((profile as any)?.[1] || ensAvatar || '');
   const badges = MILESTONE_TIERS.filter((t) => idx?.badges?.includes(t));
-  
 
   return (
     <main className="container profile-page">
@@ -934,51 +1074,56 @@ function Profile({ wallet }: { wallet: string }) {
           <h2>{displayName}</h2>
           <p className="mono">{address}</p>
         </div>
-        <div className="profile-link">
-          {/* <a href={`${location.origin}/profile/${address}`}>
-            <Copy size={15} /> 
-          </a> */}
-        </div>
+        <div className="profile-link" />
       </section>
+
+      {profileIsError && (
+        <p className="muted" style={{ color: '#b42318' }}>
+          Couldn't read this profile from the chain: {profileError instanceof Error ? profileError.message : 'unknown error'}.
+        </p>
+      )}
+      {!profileIsLoading && !profileIsError && !profileHasOnChainData && (
+        <p className="muted">
+          No username or avatar found on-chain for this address{own ? ' — save one below.' : '.'}
+        </p>
+      )}
 
       {own && (
         <section className="panel editor">
           <h3>Edit profile</h3>
           <div className="inline-form">
             <input placeholder="Username" value={name} onChange={(e) => setName(e.target.value)} />
-            <button className="secondary" onClick={() => {
-    const randomAvatar =
-      presetAvatars[
-        Math.floor(Math.random() * presetAvatars.length)
-      ];
-
-    setAvatar(randomAvatar);
-  }}
->
-  Avatar
-</button>
-            <button className="primary" onClick={save}>
-              Save 
+            <button
+              className="secondary"
+              onClick={() => {
+                const randomAvatar = presetAvatars[Math.floor(Math.random() * presetAvatars.length)];
+                setAvatar(randomAvatar);
+              }}
+            >
+              Avatar
+            </button>
+            <button className="primary" onClick={save} disabled={saveStatus === 'saving'}>
+              {saveStatus === 'saving' ? 'Saving…' : 'Save'}
             </button>
           </div>
+          {saveMessage && (
+            <p className="muted" style={{ marginTop: 8, fontSize: 13, color: saveStatus === 'error' ? '#b42318' : undefined }}>
+              {saveMessage}
+            </p>
+          )}
         </section>
       )}
 
-      <section className="stats-grid">
-  {[
-    ['GM count', stats.data?.gmCount ?? '—'],
-    ['Current streak', stats.data?.streak ?? '—'],
-    ['Longest streak', stats.data?.longestStreak ?? '—'],
-    ['Total points', stats.data?.totalPoints ?? '—'],
-    ['Rank',rank ? `#${rank}` : '—'],
-    ['Referrals', stats.data?.successfulReferrals ?? '—'],
-  ].map(([k, v]) => (
-    <div className="metric" key={k as string}>
-      <span>{k}</span>
-      <strong>{v as string}</strong>
-    </div>
-  ))}
-</section>
+      <StatsGrid
+        items={[
+          ['GM count', stats.data?.gmCount ?? '—'],
+          ['Current streak', stats.data?.streak ?? '—'],
+          ['Longest streak', stats.data?.longestStreak ?? '—'],
+          ['Total points', stats.data?.totalPoints ?? '—'],
+          ['Rank', rank ? `#${rank}` : '—'],
+          ['Referrals', stats.data?.successfulReferrals ?? '—'],
+        ]}
+      />
 
       <section className="panel">
         <div className="panel-head">
@@ -1009,7 +1154,6 @@ function ContractDeploy() {
     <main className="container">
       <div className="page-title">
         <div>
-          {/* <span className="eyebrow">BUILDER TOOL</span> */}
           <h2>Deploy a contract</h2>
           <p>Deploy a simple contract</p>
         </div>
@@ -1027,6 +1171,8 @@ function DeployCard() {
   const [gas, setGas] = useState<bigint>();
   const [gasCost, setGasCost] = useState<string>('—');
   const [result, setResult] = useState('');
+  const [deployStatus, setDeployStatus] = useState<'idle' | 'wallet' | 'pending' | 'success' | 'error'>('idle');
+  const [deployMessage, setDeployMessage] = useState('');
 
   const ensureArc = async () => {
     if (!connector) throw new Error('No connected wallet found.');
@@ -1040,83 +1186,95 @@ function DeployCard() {
   };
 
   const estimate = async () => {
-  if (!address || !connector) return;
+    if (!address || !connector) return;
 
-  try {
-    await ensureArc();
+    try {
+      await ensureArc();
 
-    const { estimateContractGas, getGasPrice } = await import(
-      'wagmi/actions'
-    );
+      const { estimateContractGas, getGasPrice } = await import('wagmi/actions');
 
-    console.log('Estimating gas...');
-    console.log('Wallet:', address);
-    console.log('Contract:', CONTRACTS.templateDeployer);
-    console.log('Initial value:', initial);
+      const g = await estimateContractGas(config, {
+        address: CONTRACTS.templateDeployer,
+        abi: TEMPLATE_DEPLOYER_ABI,
+        functionName: 'deployStorage',
+        args: [initial],
+        account: address,
+      });
 
-    const g = await estimateContractGas(config, {
-      address: CONTRACTS.templateDeployer,
-      abi: TEMPLATE_DEPLOYER_ABI,
-      functionName: 'deployStorage',
-      args: [initial],
-      account: address,
-    });
+      const price = await getGasPrice(config);
 
-    console.log('Estimated gas:', g.toString());
+      setGas(g);
 
-    const price = await getGasPrice(config);
+      // arcMainnet.nativeCurrency.decimals is 18 (confirmed in lib/chain.ts),
+      // so the cost must be divided by 1e18, not 1e6.
+      const cost = Number(g * price) / 1e18;
 
-    console.log('Gas price:', price.toString());
-
-    setGas(g);
-
-    // Arc uses USDC as the gas currency.
-    // USDC has 6 decimals.
-    const cost = Number(g * price) / 1e6;
-
-    setGasCost(cost.toFixed(6) + ' USDC');
-
-  } catch (e) {
-    console.error('GAS ESTIMATION ERROR:', e);
-
-    setGas(undefined);
-    setGasCost('Unable to estimate');
-  }
-};
+      setGasCost(cost.toFixed(6) + ' USDC');
+    } catch (e) {
+      console.error('GAS ESTIMATION ERROR:', e);
+      setGas(undefined);
+      setGasCost('Unable to estimate');
+    }
+  };
 
   const deploy = async () => {
     if (!address || !connector) return;
-    await ensureArc();
-    const hash = await writeContractAsync({
-      chainId: arcMainnet.id,
-      address: CONTRACTS.templateDeployer,
-      abi: TEMPLATE_DEPLOYER_ABI,
-      functionName: 'deployStorage',
-      args: [initial],
-    });
-    const receipt = await waitForTransactionReceipt(config, { hash, confirmations: 1 });
 
-    // Try every log in the receipt until one successfully decodes as
-    // TemplateDeployed, rather than guessing which log is "the" event
-    // by its topic count (fragile if the ABI or event shape ever changes).
-    let deployed = '';
-    for (const log of receipt.logs) {
-      try {
-        const decoded = decodeEventLog({
-          abi: TEMPLATE_DEPLOYER_ABI,
-          eventName: 'TemplateDeployed',
-          data: log.data,
-          topics: log.topics,
-        });
-        deployed = (decoded.args as any).contractAddress || '';
-        break;
-      } catch {
-        continue;
+    try {
+      setDeployStatus('wallet');
+      setDeployMessage('Confirm the deployment in your wallet…');
+      setResult('');
+
+      await ensureArc();
+
+      const hash = await writeContractAsync({
+        chainId: arcMainnet.id,
+        address: CONTRACTS.templateDeployer,
+        abi: TEMPLATE_DEPLOYER_ABI,
+        functionName: 'deployStorage',
+        args: [initial],
+      });
+
+      setDeployStatus('pending');
+      setDeployMessage('Deploying on Arc…');
+
+      const receipt = await confirmTransaction(config, hash);
+
+      if (receipt.status !== 'success') {
+        setDeployStatus('error');
+        setDeployMessage('The deployment transaction reverted. Check it on ArcScan.');
+        return;
       }
-    }
 
-    setResult(deployed || 'Deployment confirmed — open the transaction to inspect the created address');
+      // Try every log in the receipt until one successfully decodes as
+      // TemplateDeployed, rather than guessing which log is "the" event
+      // by its topic count (fragile if the ABI or event shape ever changes).
+      let deployed = '';
+      for (const log of receipt.logs) {
+        try {
+          const decoded = decodeEventLog({
+            abi: TEMPLATE_DEPLOYER_ABI,
+            eventName: 'TemplateDeployed',
+            data: log.data,
+            topics: log.topics,
+          });
+          deployed = (decoded.args as any).contractAddress || '';
+          break;
+        } catch {
+          continue;
+        }
+      }
+
+      setResult(deployed || 'Deployment confirmed — open the transaction to inspect the created address');
+      setDeployStatus('success');
+      setDeployMessage('');
+    } catch (e: any) {
+      setDeployStatus('error');
+      setDeployMessage(e?.shortMessage || e?.message || 'Deployment failed.');
+    }
   };
+
+  const deploying = deployStatus === 'wallet' || deployStatus === 'pending';
 
   return (
     <section className="panel deploy-box">
@@ -1131,17 +1289,22 @@ function DeployCard() {
         </strong>
       </div>
       <div className="hero-actions">
-        <button className="secondary" onClick={estimate} disabled={!address}>
+        <button className="secondary" onClick={estimate} disabled={!address || deploying}>
           Estimate gas
         </button>
-        <button className="primary" disabled={!address} onClick={deploy}>
-          Deploy from wallet
+        <button className="primary" disabled={!address || deploying} onClick={deploy}>
+          {deployStatus === 'wallet' ? 'Confirm in wallet…' : deployStatus === 'pending' ? 'Deploying…' : 'Deploy from wallet'}
         </button>
       </div>
+      {deployMessage && (
+        <p className="muted" style={{ marginTop: 8, fontSize: 13, color: deployStatus === 'error' ? '#b42318' : undefined }}>
+          {deployMessage}
+        </p>
+      )}
       {result && (
         <div className="success">
           Contract deployed at{' '}
-          <a href={`https://explorer.arc.io/address/${result}`} target="_blank">
+          <a href={`https://explorer.arc.io/address/${result}`} target="_blank" rel="noopener noreferrer">
             {result} <ExternalLink size={13} />
           </a>
         </div>
